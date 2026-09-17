@@ -328,6 +328,12 @@ function fillForm() {
   $("port").value = (info.broker ? info.port : last.port) || 1883;
   $("password").value = "";
 
+  // Same web password for every sensor on the site
+  $("webPassword").value = last.webPassword || "";
+  $("webPassword").placeholder = info.webPasswordSet
+    ? "Leave empty to keep current password"
+    : "At least 6 characters";
+
   let hasLocation = false;
   for (const field of META_FIELDS) {
     const value = info[field] || (!info.broker ? last.meta?.[field] : "") || "";
@@ -353,6 +359,16 @@ async function save(event) {
     return;
   }
 
+  const webPassword = $("webPassword").value;
+  if (!webPassword && !info.webPasswordSet) {
+    showStatus("err", "Set a web password for the sensor web page");
+    return;
+  }
+  if (webPassword && webPassword.length < 6) {
+    showStatus("err", "Web password must be at least 6 characters");
+    return;
+  }
+
   const meta = {};
   for (const field of META_FIELDS) {
     meta[field] = $(field).value.trim();
@@ -363,6 +379,7 @@ async function save(event) {
     password: $("password").value,
     broker,
     port,
+    webPassword,
     meta
   }) + "\n";
 
@@ -388,12 +405,13 @@ async function save(event) {
       return;
     }
 
-    remember({ ssid, broker, port, meta });
+    remember({ ssid, broker, port, meta, webPassword: webPassword || loadRemembered().webPassword || "" });
 
     $("resDevice").textContent = info.id;
     $("resIp").textContent = status.ip || "-";
     $("resSsid").textContent = ssid;
     $("resBroker").textContent = `${broker}:${port}`;
+    $("resWeb").textContent = status.ip ? `http://${status.ip}  (user: admin)` : "user: admin";
 
     if (status.broker) {
       showStatus("ok", "Connected to Wi-Fi and broker");

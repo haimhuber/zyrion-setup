@@ -188,6 +188,15 @@
     </section>
 
     <section class="card">
+      <h2>Web access</h2>
+      <p class="hint">Password for the sensor web page (user: admin). Use the same password for all sensors on the site.</p>
+      <div class="field">
+        <label for="webPassword">Web password</label>
+        <input id="webPassword" type="password" minlength="6" autocapitalize="off" spellcheck="false" autocomplete="new-password">
+      </div>
+    </section>
+
+    <section class="card">
       <details id="locationDetails">
         <summary>Location</summary>
         <div class="row">
@@ -215,6 +224,7 @@
       <dt>IP address</dt><dd id="resIp"></dd>
       <dt>Wi-Fi</dt><dd id="resSsid"></dd>
       <dt>Broker</dt><dd id="resBroker"></dd>
+      <dt>Web page</dt><dd id="resWeb"></dd>
     </dl>
     <p class="hint">The sensor restarts and starts sending data to the broker.</p>
     <button class="primary" id="btnNext">Configure next sensor</button>
