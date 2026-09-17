@@ -10,6 +10,10 @@ const CONFIG_UUID  = "5a7e0004-8f2b-4c3d-9a1e-2b7c6d5e4f30";
 const STATUS_UUID  = "5a7e0005-8f2b-4c3d-9a1e-2b7c6d5e4f30";
 
 const CHUNK_SIZE = 180;
+// Must match ConfigManager::PUBLISH_INTERVAL_* in the firmware
+const DEFAULT_PUBLISH_INTERVAL = 30;
+const MIN_PUBLISH_INTERVAL = 5;
+const MAX_PUBLISH_INTERVAL = 300;
 const MANUAL_SSID = "__manual__";
 const META_FIELDS = [
   "site", "building", "floor", "room", "department",
@@ -326,6 +330,8 @@ function fillForm() {
   // values (same site, same broker)
   $("broker").value = info.broker || last.broker || "";
   $("port").value = (info.broker ? info.port : last.port) || 1883;
+  $("publishInterval").value =
+    info.publishInterval || last.publishInterval || DEFAULT_PUBLISH_INTERVAL;
   $("password").value = "";
   let hasLocation = false;
   for (const field of META_FIELDS) {
@@ -351,6 +357,16 @@ async function save(event) {
     showStatus("err", "Enter the broker IP address");
     return;
   }
+  const publishInterval = parseInt($("publishInterval").value, 10);
+  if (
+    !Number.isInteger(publishInterval) ||
+    publishInterval < MIN_PUBLISH_INTERVAL ||
+    publishInterval > MAX_PUBLISH_INTERVAL
+  ) {
+    showStatus("err", `Publish interval must be ${MIN_PUBLISH_INTERVAL}-${MAX_PUBLISH_INTERVAL} seconds`);
+    return;
+  }
+
   const meta = {};
   for (const field of META_FIELDS) {
     meta[field] = $(field).value.trim();
@@ -361,6 +377,7 @@ async function save(event) {
     password: $("password").value,
     broker,
     port,
+    publishInterval,
     meta
   }) + "\n";
 
@@ -386,7 +403,7 @@ async function save(event) {
       return;
     }
 
-    remember({ ssid, broker, port, meta });
+    remember({ ssid, broker, port, publishInterval, meta });
 
     $("resDevice").textContent = info.id;
     $("resIp").textContent = status.ip || "-";
