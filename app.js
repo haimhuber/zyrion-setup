@@ -23,6 +23,7 @@ let device = null;
 let chars = {};
 let info = {};
 let saving = false;
+let connectError = false;
 let statusWaiters = [];
 
 const encoder = new TextEncoder();
@@ -145,24 +146,33 @@ async function connect() {
 
   device.addEventListener("gattserverdisconnected", onDisconnected);
 
+  let step = "connect";
+  connectError = false;
+
   try {
     showStatus("info", `Connecting to ${device.name || "sensor"}...`, true);
 
     const server = await device.gatt.connect();
+
+    step = "service";
     const service = await server.getPrimaryService(SERVICE_UUID);
 
+    step = "characteristics";
     chars.info = await service.getCharacteristic(INFO_UUID);
     chars.scan = await service.getCharacteristic(SCAN_UUID);
     chars.config = await service.getCharacteristic(CONFIG_UUID);
     chars.status = await service.getCharacteristic(STATUS_UUID);
 
-    // First secured read triggers the Android PIN pairing dialog
+    // First secured read triggers the PIN pairing dialog
+    step = "read info";
     showStatus("info", "If asked, enter the 6-digit PIN from the sensor label", true);
     info = await readJson(chars.info);
 
+    step = "notifications";
     chars.status.addEventListener("characteristicvaluechanged", onStatusChanged);
     await gatt(() => chars.status.startNotifications());
 
+    step = "form";
     fillForm();
     showStep("stepConfig");
     $("headerDevice").textContent = info.id;
@@ -170,9 +180,18 @@ async function connect() {
 
     await scan();
   } catch (error) {
-    showStatus("err", `Connection failed: ${error.message}. Check the PIN and try again.`);
+    // Keep this message: the disconnect below must not replace it
+    connectError = true;
+    showStatus("err", `Connection failed at step "${step}": ${error.name}: ${error.message}`);
     disconnect();
   }
+}
+
+// Bluefy (iOS) may lack writeValueWithResponse
+function writeChar(characteristic, data) {
+  return characteristic.writeValueWithResponse
+    ? characteristic.writeValueWithResponse(data)
+    : characteristic.writeValue(data);
 }
 
 function disconnect() {
@@ -184,6 +203,10 @@ function disconnect() {
 function onDisconnected() {
   if (saving) {
     return; // expected: sensor restarts after saving
+  }
+  if (connectError) {
+    showStep("stepConnect");
+    return; // keep the error message visible
   }
   if (!$("stepResult").classList.contains("hidden")) {
     return;
@@ -206,7 +229,7 @@ async function scan() {
 
   try {
     const done = waitForStatus(["scan_done"], 20000);
-    await gatt(() => chars.scan.writeValueWithResponse(Uint8Array.of(1)));
+    await gatt(() => writeChar(chars.scan, Uint8Array.of(1)));
     await done;
 
     const networks = await readJson(chars.scan);
@@ -235,7 +258,7 @@ async function scan() {
     onSsidChanged();
     hideStatus();
   } catch (error) {
-    showStatus("err", `Scan failed: ${error.message}`);
+    showStatus("err", `Scan failed: ${error.name}: ${error.message}`);
   } finally {
     $("btnScan").disabled = false;
   }
@@ -323,7 +346,7 @@ async function save(event) {
     const bytes = encoder.encode(payload);
     for (let offset = 0; offset < bytes.length; offset += CHUNK_SIZE) {
       const chunk = bytes.slice(offset, offset + CHUNK_SIZE);
-      await gatt(() => chars.config.writeValueWithResponse(chunk));
+      await gatt(() => writeChar(chars.config, chunk));
     }
 
     const status = await result;
