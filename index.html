@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ZYRION Setup</title>
+<meta name="theme-color" content="#0f172a">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<style>
+  :root {
+    --bg: #f1f5f9;
+    --card: #ffffff;
+    --text: #0f172a;
+    --muted: #64748b;
+    --border: #e2e8f0;
+    --primary: #0369a1;
+    --primary-text: #ffffff;
+    --ok: #15803d;
+    --ok-bg: #dcfce7;
+    --warn: #a16207;
+    --warn-bg: #fef9c3;
+    --err: #b91c1c;
+    --err-bg: #fee2e2;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0b1220;
+      --card: #111a2e;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --border: #1e293b;
+      --primary: #38bdf8;
+      --primary-text: #0b1220;
+      --ok: #4ade80;
+      --ok-bg: #052e16;
+      --warn: #facc15;
+      --warn-bg: #3a2e05;
+      --err: #f87171;
+      --err-bg: #3b0a0a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    background: #0f172a;
+    color: #fff;
+    padding: 14px 20px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  header img { width: 32px; height: 32px; }
+  header h1 { font-size: 18px; margin: 0; letter-spacing: .5px; }
+  header .device { margin-left: auto; font-size: 14px; opacity: .8; }
+  main { max-width: 720px; margin: 0 auto; padding: 20px 16px 48px; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 20px;
+    margin-bottom: 16px;
+  }
+  h2 { font-size: 17px; margin: 0 0 14px; }
+  p.hint { color: var(--muted); margin: 0 0 16px; }
+  label { display: block; font-size: 14px; color: var(--muted); margin: 0 0 6px; }
+  .field { margin-bottom: 14px; }
+  input, select {
+    width: 100%;
+    font: inherit;
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px;
+    min-height: 48px;
+  }
+  input:focus, select:focus { outline: 2px solid var(--primary); outline-offset: 1px; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .row-wide { display: grid; grid-template-columns: 1fr 120px; gap: 12px; }
+  .inline { display: flex; gap: 8px; }
+  .inline select { flex: 1; }
+  button {
+    font: inherit;
+    font-weight: 600;
+    border: 0;
+    border-radius: 10px;
+    min-height: 48px;
+    padding: 0 20px;
+    cursor: pointer;
+  }
+  button.primary { background: var(--primary); color: var(--primary-text); width: 100%; }
+  button.secondary { background: transparent; color: var(--primary); border: 1px solid var(--border); }
+  button:disabled { opacity: .5; cursor: default; }
+  details summary { cursor: pointer; font-weight: 600; padding: 4px 0; }
+  details[open] summary { margin-bottom: 14px; }
+  .status {
+    border-radius: 10px;
+    padding: 14px;
+    margin-bottom: 16px;
+    display: none;
+  }
+  .status.show { display: block; }
+  .status.info { background: var(--bg); }
+  .status.ok { background: var(--ok-bg); color: var(--ok); }
+  .status.warn { background: var(--warn-bg); color: var(--warn); }
+  .status.err { background: var(--err-bg); color: var(--err); }
+  .result dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; margin: 0 0 16px; }
+  .result dt { color: var(--muted); }
+  .result dd { margin: 0; font-weight: 600; word-break: break-all; }
+  .hidden { display: none !important; }
+  .spinner {
+    display: inline-block; width: 16px; height: 16px; margin-right: 8px;
+    border: 2px solid currentColor; border-right-color: transparent;
+    border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -3px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (max-width: 480px) {
+    .row { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <img src="icon.svg" alt="">
+  <h1>ZYRION Setup</h1>
+  <span class="device" id="headerDevice"></span>
+</header>
+
+<main>
+
+  <div id="status" class="status"></div>
+
+  <!-- STEP 1: CONNECT -->
+  <section id="stepConnect" class="card">
+    <h2>Connect to a sensor</h2>
+    <p class="hint">
+      Power on the sensor. A new sensor starts in setup mode automatically.
+      For a sensor that is already installed, hold the BOOT button for 5 seconds.
+      On first connection Android asks for the 6-digit PIN printed on the sensor.
+    </p>
+    <button class="primary" id="btnConnect">Find sensor</button>
+    <p class="hint hidden" id="unsupported" style="margin-top:16px">
+      This browser does not support Bluetooth. Use Chrome on Android or on a computer.
+    </p>
+  </section>
+
+  <!-- STEP 2: CONFIGURE -->
+  <form id="stepConfig" class="hidden" autocomplete="off">
+
+    <section class="card">
+      <h2>Wi-Fi</h2>
+      <div class="field">
+        <label for="ssidSelect">Network</label>
+        <div class="inline">
+          <select id="ssidSelect"></select>
+          <button type="button" class="secondary" id="btnScan">Scan</button>
+        </div>
+      </div>
+      <div class="field hidden" id="ssidManualField">
+        <label for="ssidManual">Network name</label>
+        <input id="ssidManual" autocapitalize="off" spellcheck="false">
+      </div>
+      <div class="field">
+        <label for="password">Password</label>
+        <input id="password" type="password" autocapitalize="off" spellcheck="false">
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>MQTT broker</h2>
+      <div class="row-wide">
+        <div class="field">
+          <label for="broker">Broker IP address</label>
+          <input id="broker" inputmode="decimal" placeholder="192.168.1.10" autocapitalize="off" spellcheck="false" required>
+        </div>
+        <div class="field">
+          <label for="port">Port</label>
+          <input id="port" type="number" min="1" max="65535" value="1883" required>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <details id="locationDetails">
+        <summary>Location</summary>
+        <div class="row">
+          <div class="field"><label for="site">Site</label><input id="site"></div>
+          <div class="field"><label for="building">Building</label><input id="building"></div>
+          <div class="field"><label for="floor">Floor</label><input id="floor"></div>
+          <div class="field"><label for="room">Room</label><input id="room"></div>
+          <div class="field"><label for="department">Department</label><input id="department"></div>
+          <div class="field"><label for="zone">Zone</label><input id="zone"></div>
+          <div class="field"><label for="panel">Panel</label><input id="panel"></div>
+          <div class="field"><label for="equipment">Equipment</label><input id="equipment"></div>
+        </div>
+        <div class="field"><label for="description">Description</label><input id="description"></div>
+      </details>
+    </section>
+
+    <button class="primary" id="btnSave" type="submit">Save and connect</button>
+  </form>
+
+  <!-- STEP 3: RESULT -->
+  <section id="stepResult" class="card result hidden">
+    <h2>Sensor configured</h2>
+    <dl>
+      <dt>Sensor</dt><dd id="resDevice"></dd>
+      <dt>IP address</dt><dd id="resIp"></dd>
+      <dt>Wi-Fi</dt><dd id="resSsid"></dd>
+      <dt>Broker</dt><dd id="resBroker"></dd>
+    </dl>
+    <p class="hint">The sensor restarts and starts sending data to the broker.</p>
+    <button class="primary" id="btnNext">Configure next sensor</button>
+  </section>
+
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>
