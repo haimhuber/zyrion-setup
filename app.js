@@ -24,6 +24,7 @@ let chars = {};
 let info = {};
 let saving = false;
 let connectError = false;
+let lastStep = "";
 let statusWaiters = [];
 
 const encoder = new TextEncoder();
@@ -51,6 +52,12 @@ function showStatus(kind, text, busy = false) {
     el.appendChild(spinner);
   }
   el.appendChild(document.createTextNode(text));
+}
+
+const logStart = Date.now();
+function log(text) {
+  const seconds = ((Date.now() - logStart) / 1000).toFixed(1);
+  $("debugLog").textContent += `${seconds}s  ${text}\n`;
 }
 
 function hideStatus() {
@@ -110,9 +117,11 @@ async function onStatusChanged() {
   let status;
   try {
     status = await readJson(chars.status);
-  } catch {
+  } catch (error) {
+    log(`status read ERROR: ${error.message}`);
     return;
   }
+  log(`status: ${JSON.stringify(status)}`);
 
   if (status.state === "connecting") {
     showStatus("info", status.message || "Connecting to Wi-Fi...", true);
@@ -148,31 +157,43 @@ async function connect() {
 
   let step = "connect";
   connectError = false;
+  lastStep = step;
+
+  const enter = (name) => {
+    step = name;
+    lastStep = name;
+    log(`step: ${name}`);
+  };
 
   try {
+    log(`selected ${device.name || device.id}`);
     showStatus("info", `Connecting to ${device.name || "sensor"}...`, true);
 
+    enter("connect");
     const server = await device.gatt.connect();
 
-    step = "service";
+    enter("service");
     const service = await server.getPrimaryService(SERVICE_UUID);
 
-    step = "characteristics";
+    enter("characteristics");
     chars.info = await service.getCharacteristic(INFO_UUID);
     chars.scan = await service.getCharacteristic(SCAN_UUID);
     chars.config = await service.getCharacteristic(CONFIG_UUID);
     chars.status = await service.getCharacteristic(STATUS_UUID);
 
     // First secured read triggers the PIN pairing dialog
-    step = "read info";
+    enter("read info");
     showStatus("info", "If asked, enter the 6-digit PIN from the sensor label", true);
-    info = await readJson(chars.info);
+    const raw = await gatt(() => chars.info.readValue());
+    const text = decoder.decode(raw);
+    log(`info (${raw.byteLength} bytes): ${text}`);
+    info = JSON.parse(text);
 
-    step = "notifications";
+    enter("notifications");
     chars.status.addEventListener("characteristicvaluechanged", onStatusChanged);
     await gatt(() => chars.status.startNotifications());
 
-    step = "form";
+    enter("form");
     fillForm();
     showStep("stepConfig");
     $("headerDevice").textContent = info.id;
@@ -182,6 +203,8 @@ async function connect() {
   } catch (error) {
     // Keep this message: the disconnect below must not replace it
     connectError = true;
+    log(`ERROR at ${step}: ${error.name}: ${error.message}`);
+    $("debugDetails").open = true;
     showStatus("err", `Connection failed at step "${step}": ${error.name}: ${error.message}`);
     disconnect();
   }
@@ -201,6 +224,8 @@ function disconnect() {
 }
 
 function onDisconnected() {
+  log(`disconnected (last step: ${lastStep})`);
+  $("debugDetails").open = true;
   if (saving) {
     return; // expected: sensor restarts after saving
   }
@@ -229,10 +254,13 @@ async function scan() {
 
   try {
     const done = waitForStatus(["scan_done"], 20000);
+    log("scan: write request");
     await gatt(() => writeChar(chars.scan, Uint8Array.of(1)));
+    log("scan: waiting for result");
     await done;
 
     const networks = await readJson(chars.scan);
+    log(`scan: ${networks.length} networks`);
 
     select.innerHTML = "";
 
@@ -258,6 +286,8 @@ async function scan() {
     onSsidChanged();
     hideStatus();
   } catch (error) {
+    log(`scan ERROR: ${error.name}: ${error.message}`);
+    $("debugDetails").open = true;
     showStatus("err", `Scan failed: ${error.name}: ${error.message}`);
   } finally {
     $("btnScan").disabled = false;
