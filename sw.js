@@ -1,6 +1,6 @@
 // Offline support - sites may have no internet access.
 // Bump the version when app files change.
-const CACHE = "zyrion-setup-v4";
+const CACHE = "zyrion-setup-v5";
 
 const FILES = [
   "./",
