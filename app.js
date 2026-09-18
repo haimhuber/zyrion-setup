@@ -58,10 +58,21 @@ function showStatus(kind, text, busy = false) {
   el.appendChild(document.createTextNode(text));
 }
 
-const logStart = Date.now();
+let logStart = Date.now();
+
 function log(text) {
   const seconds = ((Date.now() - logStart) / 1000).toFixed(1);
   $("debugLog").textContent += `${seconds}s  ${text}\n`;
+}
+
+// Each attempt starts with an empty log. A line left over from an
+// earlier attempt is indistinguishable from a current one, and a stale
+// "selected <other sensor>" is exactly the sort of thing that sends
+// someone chasing the wrong unit.
+function startLog(header) {
+  logStart = Date.now();
+  $("debugLog").textContent = "";
+  log(`${new Date().toLocaleTimeString()} — ${header}`);
 }
 
 function hideStatus() {
@@ -100,6 +111,68 @@ function remember(values) {
 // Bluetooth
 // ------------------------------------------------------
 
+// A rejection here can be a DOMException (Chrome), a plain object or a
+// string (Bluefy on iOS), or nothing at all. Never render "undefined".
+function describeError(error) {
+  if (error === null || error === undefined) return "no error detail";
+  if (typeof error === "string") return error;
+  const name = typeof error.name === "string" ? error.name : "";
+  const message =
+    (typeof error.message === "string" && error.message) ||
+    (typeof error.errorMessage === "string" && error.errorMessage) ||
+    (typeof error.description === "string" && error.description) ||
+    "";
+  const text = [name, message].filter(Boolean).join(": ");
+  if (text) return text;
+  try {
+    const json = JSON.stringify(error);
+    if (json && json !== "{}") return json;
+  } catch {
+    // not serialisable
+  }
+  return String(error) === "[object Object]" ? "no error detail" : String(error);
+}
+
+// What the technician should DO. The raw detail stays in the log.
+function failureAdvice(step, detail) {
+  const text = `${step} ${detail}`.toLowerCase();
+
+  const looksLikePairing =
+    /encrypt|authent|pair|bond|security|insufficient|0x05|0x0f|133/.test(text);
+
+  if (looksLikePairing) {
+    return (
+      "Pairing was rejected. If this sensor was reset, your phone still holds the old pairing: " +
+      "open Bluetooth settings, choose Forget This Device for it, then connect again.\n" +
+      "הצימוד נדחה. אם החיישן אופס, בטלפון עדיין שמור צימוד ישן: " +
+      "פתח הגדרות Bluetooth, בחר Forget This Device עבורו, ונסה להתחבר שוב."
+    );
+  }
+
+  if (step === "connect") {
+    return (
+      "Could not connect to the sensor. Move closer and try again. If it still fails, the phone may hold " +
+      "an old pairing after a sensor reset: Bluetooth settings, Forget This Device, then connect again.\n" +
+      "לא ניתן להתחבר לחיישן. התקרב אליו ונסה שוב. אם זה נמשך, ייתכן שבטלפון שמור צימוד ישן אחרי איפוס החיישן: " +
+      "הגדרות Bluetooth, Forget This Device, ואז להתחבר מחדש."
+    );
+  }
+
+  if (step === "read info") {
+    return (
+      "Connected, but the sensor refused to share its details. This is usually a wrong PIN or an old pairing: " +
+      "Bluetooth settings, Forget This Device, then connect again and enter the PIN from the label.\n" +
+      "יש חיבור, אך החיישן לא מוסר את הפרטים שלו. בדרך כלל זה PIN שגוי או צימוד ישן: " +
+      "הגדרות Bluetooth, Forget This Device, ואז להתחבר שוב ולהקליד את ה-PIN מהמדבקה."
+    );
+  }
+
+  return (
+    "The sensor stopped responding. Keep the phone close, then connect again.\n" +
+    "החיישן הפסיק להגיב. השאר את הטלפון קרוב אליו ונסה להתחבר שוב."
+  );
+}
+
 async function readJson(characteristic) {
   const value = await gatt(() => characteristic.readValue());
   return JSON.parse(decoder.decode(value));
@@ -122,7 +195,7 @@ async function onStatusChanged() {
   try {
     status = await readJson(chars.status);
   } catch (error) {
-    log(`status read ERROR: ${error.message}`);
+    log(`status read ERROR: ${describeError(error)}`);
     return;
   }
   log(`status: ${JSON.stringify(status)}`);
@@ -149,15 +222,26 @@ async function connect() {
     return;
   }
 
+  // Drop the previous device before choosing a new one, so a stale
+  // object cannot report disconnects against the sensor in hand
+  if (device) {
+    device.removeEventListener("gattserverdisconnected", onDisconnected);
+    device = null;
+  }
+
+  let chosen;
   try {
-    device = await navigator.bluetooth.requestDevice({
+    chosen = await navigator.bluetooth.requestDevice({
       filters: [{ services: [SERVICE_UUID] }]
     });
   } catch {
     return; // user cancelled the chooser
   }
 
+  device = chosen;
   device.addEventListener("gattserverdisconnected", onDisconnected);
+
+  startLog(`chooser returned: ${device.name || "(no name)"} [${device.id || "no id"}]`);
 
   let step = "connect";
   connectError = false;
@@ -170,7 +254,6 @@ async function connect() {
   };
 
   try {
-    log(`selected ${device.name || device.id}`);
     showStatus("info", `Connecting to ${device.name || "sensor"}...`, true);
 
     enter("connect");
@@ -207,9 +290,10 @@ async function connect() {
   } catch (error) {
     // Keep this message: the disconnect below must not replace it
     connectError = true;
-    log(`ERROR at ${step}: ${error.name}: ${error.message}`);
+    const detail = describeError(error);
+    log(`ERROR at ${step}: ${detail}`);
     $("debugDetails").open = true;
-    showStatus("err", `Connection failed at step "${step}": ${error.name}: ${error.message}`);
+    showStatus("err", failureAdvice(step, detail));
     disconnect();
   }
 }
@@ -290,9 +374,10 @@ async function scan() {
     onSsidChanged();
     hideStatus();
   } catch (error) {
-    log(`scan ERROR: ${error.name}: ${error.message}`);
+    log(`scan ERROR: ${describeError(error)}`);
     $("debugDetails").open = true;
-    showStatus("err", `Scan failed: ${error.name}: ${error.message}`);
+    showStatus("err", `Wi-Fi scan failed. Keep the phone close to the sensor and press Scan again.
+סריקת רשתות ה-Wi-Fi נכשלה. השאר את הטלפון קרוב לחיישן ולחץ Scan שוב.`);
   } finally {
     $("btnScan").disabled = false;
   }
@@ -421,7 +506,8 @@ async function save(event) {
   } catch (error) {
     saving = false;
     setBusy(false);
-    showStatus("err", `Save failed: ${error.message}`);
+    showStatus("err", `Saving failed: ${describeError(error)}. Keep the phone close to the sensor and try again.
+השמירה נכשלה. השאר את הטלפון קרוב לחיישן ונסה שוב.`);
   }
 }
 
