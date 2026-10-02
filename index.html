@@ -127,7 +127,7 @@
   }
 </style>
 </head>
-<body>
+<body data-app-version="9">
 
 <header>
   <img src="icon.svg" alt="">
@@ -136,6 +136,15 @@
 </header>
 
 <main>
+
+  <div id="staleApp" class="status show err">
+    This page and its script do not match - the app did not finish updating.
+    Tap Reload app, or close the app completely and open it again.
+    הדף והסקריפט לא מתאימים - העדכון לא הושלם. לחץ Reload app, או סגור את האפליקציה לגמרי ופתח שוב.
+    <div style="margin-top:12px">
+      <button type="button" class="secondary" id="btnHardReload">Reload app</button>
+    </div>
+  </div>
 
   <div id="status" class="status"></div>
 
@@ -203,6 +212,7 @@
         <label for="profileSelect">Sensor type</label>
         <div class="inline">
           <select id="profileSelect"></select>
+          <button type="button" class="secondary" id="btnRetryProfiles" hidden>Retry</button>
           <button type="button" class="secondary" id="btnProbe">Check</button>
         </div>
       </div>
@@ -257,6 +267,6 @@
 
 </main>
 
-<script src="app.js"></script>
+<script src="app.js?v=9"></script>
 </body>
 </html>

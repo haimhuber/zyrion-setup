@@ -28,8 +28,20 @@ const PROFILE_LABELS = {
   auto: "Automatic — SHT31 or DHT (older sensors)"
 };
 
-// Used only if an older firmware does not report its list
+// Used only if a sensor does not report its list
 const FALLBACK_PROFILES = ["sht31", "scd41", "bh1750", "dht", "auto"];
+
+// Must match data-app-version on <body> in index.html, and the ?v= on the
+// script tag that loads this file.
+//
+// Why this exists: a page served fresh alongside a cached older app.js
+// renders the Sensor card with nothing to put in it, and the person sees an
+// empty dropdown with no explanation. The versioned script URL stops that
+// happening; this check catches it if it happens anyway.
+const APP_VERSION = "9";
+
+// Sensor firmware older than this has no probe command, so Check cannot work
+const MIN_FIRMWARE_FOR_PROBE = "1.4.0";
 
 // An SCD41 in low-power mode cannot produce its first sample for 30 s, and
 // the probe waits for a real one rather than reporting a guess
@@ -452,12 +464,26 @@ function showProbe(kind, text, busy = false) {
   el.appendChild(document.createTextNode(text));
 }
 
+// "1.4.0" vs "1.3.0" - numeric, part by part, missing parts count as 0
+function firmwareAtLeast(version, minimum) {
+  if (typeof version !== "string" || version === "") return false;
+
+  const parts = version.split(".").map((part) => parseInt(part, 10) || 0);
+  const wanted = minimum.split(".").map((part) => parseInt(part, 10) || 0);
+
+  for (let i = 0; i < Math.max(parts.length, wanted.length); i++) {
+    const a = parts[i] || 0;
+    const b = wanted[i] || 0;
+    if (a !== b) return a > b;
+  }
+
+  return true;
+}
+
 function fillProfiles() {
   const select = $("profileSelect");
-  const offered =
-    Array.isArray(info.profiles) && info.profiles.length
-      ? info.profiles
-      : FALLBACK_PROFILES;
+  const reported = Array.isArray(info.profiles) ? info.profiles : null;
+  const offered = reported && reported.length ? reported : FALLBACK_PROFILES;
 
   select.innerHTML = "";
 
@@ -467,6 +493,18 @@ function fillProfiles() {
     option.textContent = PROFILE_LABELS[key] || key;
     select.appendChild(option);
   }
+
+  // An empty dropdown is never an acceptable end state: say what went wrong
+  // and offer to read the sensor again.
+  if (select.children.length === 0) {
+    showProfileError(
+      "Could not load the sensor types from this unit.\n" +
+      "לא ניתן לטעון את סוגי החיישנים מהיחידה."
+    );
+    return;
+  }
+
+  $("btnRetryProfiles").hidden = true;
 
   // What the sensor is already configured for, if anything
   if (info.profile && offered.includes(info.profile)) {
@@ -485,6 +523,74 @@ function fillProfiles() {
   verifiedDetail = "";
 
   onProfileChanged();
+
+  // Two situations worth saying out loud rather than papering over
+
+  if (!firmwareAtLeast(info.fw, MIN_FIRMWARE_FOR_PROBE)) {
+    showProbe(
+      "warn",
+      `This sensor runs firmware ${info.fw || "(unknown)"}, which cannot check ` +
+      `a sensor type - that needs ${MIN_FIRMWARE_FOR_PROBE} or newer. Wi-Fi, ` +
+      `broker and location can still be saved.\n` +
+      `הקושחה של החיישן (${info.fw || "לא ידוע"}) לא תומכת בבדיקת סוג חיישן - ` +
+      `נדרשת ${MIN_FIRMWARE_FOR_PROBE} ומעלה.`
+    );
+
+    return;
+  }
+
+  if (!reported || !reported.length) {
+    showProbe(
+      "warn",
+      "This sensor did not report which sensor types it supports, so the list " +
+      "above is the one this app knows. Retry to read it again.\n" +
+      "החיישן לא דיווח אילו סוגי חיישנים הוא תומך, ולכן הרשימה היא זו שהאפליקציה מכירה."
+    );
+
+    $("btnRetryProfiles").hidden = false;
+  }
+}
+
+function showProfileError(message) {
+  showProbe("err", message);
+
+  $("btnRetryProfiles").hidden = false;
+}
+
+// Reads the device info again over Bluetooth and repopulates the list. The
+// first read can come back trimmed or fail outright, and a person on site
+// needs a way to ask again that is not "disconnect and start over".
+async function reloadProfiles() {
+  if (!chars.info) {
+    showProfileError(
+      "Not connected to a sensor.\nאין חיבור לחיישן."
+    );
+    return;
+  }
+
+  $("btnRetryProfiles").disabled = true;
+  showProbe("info", "Reading the sensor again...", true);
+
+  try {
+    const raw = await gatt(() => chars.info.readValue());
+    const text = decoder.decode(raw);
+
+    log(`info re-read (${raw.byteLength} bytes): ${text}`);
+
+    info = JSON.parse(text);
+
+    fillForm();
+  } catch (error) {
+    log(`info re-read ERROR: ${describeError(error)}`);
+    $("debugDetails").open = true;
+
+    showProfileError(
+      "Could not read the sensor. Keep the phone close to it and try again.\n" +
+      "לא ניתן לקרוא מהחיישן. השאר את הטלפון קרוב אליו ונסה שוב."
+    );
+  } finally {
+    $("btnRetryProfiles").disabled = false;
+  }
 }
 
 function measureMsFromForm() {
@@ -748,9 +854,47 @@ function next() {
 // Init
 // ------------------------------------------------------
 
+// The page shows the mismatch banner by default; a script of the right
+// version hides it. If this file is the wrong one, nothing hides it.
+(function checkAppVersion() {
+  const expected =
+    document.body.getAttribute("data-app-version") || "";
+
+  const banner = $("staleApp");
+
+  if (expected === APP_VERSION) {
+    banner.className = "status";
+    return;
+  }
+
+  // Wrong pairing of page and script: clear everything cached and reload
+  $("btnHardReload").addEventListener("click", async () => {
+    try {
+      if (navigator.serviceWorker) {
+        const registrations =
+          await navigator.serviceWorker.getRegistrations();
+
+        await Promise.all(registrations.map((r) => r.unregister()));
+      }
+
+      if (window.caches) {
+        const keys = await caches.keys();
+        await Promise.all(keys.map((key) => caches.delete(key)));
+      }
+    } catch {
+      // Nothing more to clean up; reload anyway
+    }
+
+    location.replace(
+      location.pathname + "?reload=" + Date.now()
+    );
+  });
+})();
+
 $("btnConnect").addEventListener("click", connect);
 $("btnScan").addEventListener("click", scan);
 $("btnProbe").addEventListener("click", probe);
+$("btnRetryProfiles").addEventListener("click", reloadProfiles);
 $("profileSelect").addEventListener("change", onProfileChanged);
 $("ssidSelect").addEventListener("change", onSsidChanged);
 $("ssidManual").addEventListener("input", onSsidChanged);

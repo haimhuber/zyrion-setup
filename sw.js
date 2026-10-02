@@ -1,11 +1,11 @@
 // Offline support - sites may have no internet access.
 // Bump the version when app files change.
-const CACHE = "zyrion-setup-v8";
+const CACHE = "zyrion-setup-v9";
 
 const FILES = [
   "./",
   "index.html",
-  "app.js",
+  "app.js?v=9",
   "manifest.webmanifest",
   "icon.svg"
 ];
