@@ -15,6 +15,30 @@ const DEFAULT_PUBLISH_INTERVAL = 30;
 const MIN_PUBLISH_INTERVAL = 5;
 const MAX_PUBLISH_INTERVAL = 300;
 const MANUAL_SSID = "__manual__";
+
+// Sensor profiles. The firmware reports which ones its image carries
+// (info.profiles); these are the names a person reads. A key the firmware
+// offers and this list does not know is still shown, by its key, rather
+// than being hidden - the firmware is the authority on what it supports.
+const PROFILE_LABELS = {
+  sht31: "SHT31 — temperature and humidity",
+  scd41: "M5Stack U104 / SCD41 — CO₂, temperature and humidity",
+  bh1750: "BH1750 — light level",
+  dht: "DHT11 / DHT22 — temperature and humidity",
+  auto: "Automatic — SHT31 or DHT (older sensors)"
+};
+
+// Used only if an older firmware does not report its list
+const FALLBACK_PROFILES = ["sht31", "scd41", "bh1750", "dht", "auto"];
+
+// An SCD41 in low-power mode cannot produce its first sample for 30 s, and
+// the probe waits for a real one rather than reporting a guess
+const PROBE_TIMEOUT_MS = 75000;
+
+// Must match ConfigManager::MEASURE_INTERVAL_* in the firmware
+const MIN_MEASURE_SECONDS = 1;
+const MAX_MEASURE_SECONDS = 300;
+
 const META_FIELDS = [
   "site", "building", "floor", "room", "department",
   "zone", "panel", "equipment", "description"
@@ -30,6 +54,10 @@ let saving = false;
 let connectError = false;
 let lastStep = "";
 let statusWaiters = [];
+
+// The profile whose check passed on this sensor, and what it reported
+let verifiedProfile = "";
+let verifiedDetail = "";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -206,6 +234,10 @@ async function onStatusChanged() {
     showStatus("info", `Wi-Fi connected (${status.ip}). Checking broker...`, true);
   } else if (status.state === "scanning") {
     showStatus("info", "Scanning Wi-Fi networks...", true);
+  } else if (status.state === "probing") {
+    // The sensor reports each step of the check as it happens, so a slow
+    // sensor does not look like a frozen screen
+    showProbe("info", status.message || "Checking the sensor...", true);
   }
 
   for (const waiter of [...statusWaiters]) {
@@ -405,6 +437,157 @@ function onSsidChanged() {
 }
 
 // ------------------------------------------------------
+// Sensor selection and check
+// ------------------------------------------------------
+
+function showProbe(kind, text, busy = false) {
+  const el = $("probeResult");
+  el.className = `status show ${kind}`;
+  el.innerHTML = "";
+  if (busy) {
+    const spinner = document.createElement("span");
+    spinner.className = "spinner";
+    el.appendChild(spinner);
+  }
+  el.appendChild(document.createTextNode(text));
+}
+
+function fillProfiles() {
+  const select = $("profileSelect");
+  const offered =
+    Array.isArray(info.profiles) && info.profiles.length
+      ? info.profiles
+      : FALLBACK_PROFILES;
+
+  select.innerHTML = "";
+
+  for (const key of offered) {
+    const option = document.createElement("option");
+    option.value = key;
+    option.textContent = PROFILE_LABELS[key] || key;
+    select.appendChild(option);
+  }
+
+  // What the sensor is already configured for, if anything
+  if (info.profile && offered.includes(info.profile)) {
+    select.value = info.profile;
+  }
+
+  if (info.measureMs) {
+    $("measureInterval").value = Math.round(info.measureMs / 1000);
+  } else {
+    $("measureInterval").value = "";
+  }
+
+  // A sensor that already carries this profile has been producing readings
+  // on it; it does not have to be re-checked to keep it
+  verifiedProfile = info.profileSet ? info.profile : "";
+  verifiedDetail = "";
+
+  onProfileChanged();
+}
+
+function measureMsFromForm() {
+  const text = $("measureInterval").value.trim();
+  if (text === "") return 0; // the sensor's own default
+
+  const seconds = parseInt(text, 10);
+  if (
+    !Number.isInteger(seconds) ||
+    seconds < MIN_MEASURE_SECONDS ||
+    seconds > MAX_MEASURE_SECONDS
+  ) {
+    return null; // invalid
+  }
+
+  return seconds * 1000;
+}
+
+function onProfileChanged() {
+  const selected = $("profileSelect").value;
+
+  if (selected === verifiedProfile) {
+    if (verifiedDetail) {
+      showProbe("ok", verifiedDetail);
+    } else {
+      showProbe(
+        "info",
+        "This sensor is already configured for this type. Press Check to read it now."
+      );
+    }
+    return;
+  }
+
+  showProbe(
+    "info",
+    "Press Check. This sensor type has not been verified on this unit yet."
+  );
+}
+
+async function probe() {
+  const measureMs = measureMsFromForm();
+
+  if (measureMs === null) {
+    showProbe(
+      "err",
+      `Measure every must be ${MIN_MEASURE_SECONDS}-${MAX_MEASURE_SECONDS} seconds, or empty for the sensor default.
+זמן הדגימה חייב להיות ${MIN_MEASURE_SECONDS}-${MAX_MEASURE_SECONDS} שניות, או ריק לברירת המחדל של החיישן.`
+    );
+    return;
+  }
+
+  const profile = $("profileSelect").value;
+
+  $("btnProbe").disabled = true;
+  $("btnSave").disabled = true;
+
+  showProbe("info", "Checking the sensor...", true);
+
+  try {
+    const result = waitForStatus(["probe_ok", "probe_failed"], PROBE_TIMEOUT_MS);
+
+    const payload = JSON.stringify({ probe: profile, measureMs }) + "\n";
+    const bytes = encoder.encode(payload);
+
+    for (let offset = 0; offset < bytes.length; offset += CHUNK_SIZE) {
+      await gatt(() =>
+        writeChar(chars.config, bytes.slice(offset, offset + CHUNK_SIZE))
+      );
+    }
+
+    const status = await result;
+
+    if (status.state === "probe_failed") {
+      verifiedProfile = "";
+      verifiedDetail = "";
+      showProbe(
+        "err",
+        `${status.message || "The sensor did not answer."}
+החיישן לא נמצא או לא החזיר מדידה. בדוק את החיווט ונסה שוב.`
+      );
+      return;
+    }
+
+    verifiedProfile = profile;
+    verifiedDetail = status.message || "Sensor verified";
+    showProbe("ok", verifiedDetail);
+  } catch (error) {
+    verifiedProfile = "";
+    verifiedDetail = "";
+    log(`probe ERROR: ${describeError(error)}`);
+    $("debugDetails").open = true;
+    showProbe(
+      "err",
+      `The sensor did not finish the check. Keep the phone close to it and press Check again.
+החיישן לא השלים את הבדיקה. השאר את הטלפון קרוב אליו ולחץ Check שוב.`
+    );
+  } finally {
+    $("btnProbe").disabled = false;
+    $("btnSave").disabled = false;
+  }
+}
+
+// ------------------------------------------------------
 // Form
 // ------------------------------------------------------
 
@@ -425,6 +608,8 @@ function fillForm() {
     hasLocation ||= value !== "";
   }
   $("locationDetails").open = hasLocation;
+
+  fillProfiles();
 }
 
 async function save(event) {
@@ -452,6 +637,29 @@ async function save(event) {
     return;
   }
 
+  const profile = $("profileSelect").value;
+  const measureMs = measureMsFromForm();
+
+  if (measureMs === null) {
+    showStatus(
+      "err",
+      `Measure every must be ${MIN_MEASURE_SECONDS}-${MAX_MEASURE_SECONDS} seconds, or empty for the sensor default.
+זמן הדגימה חייב להיות ${MIN_MEASURE_SECONDS}-${MAX_MEASURE_SECONDS} שניות, או ריק לברירת המחדל של החיישן.`
+    );
+    return;
+  }
+
+  // The firmware refuses this too. Checking here as well means the person
+  // is told before anything is sent, and in both languages.
+  if (profile !== verifiedProfile) {
+    showStatus(
+      "err",
+      `Press Check first. A sensor type is only saved once this unit has actually read it.
+לחץ Check קודם. סוג החיישן נשמר רק אחרי שהיחידה הזו באמת קראה ממנו מדידה.`
+    );
+    return;
+  }
+
   const meta = {};
   for (const field of META_FIELDS) {
     meta[field] = $(field).value.trim();
@@ -463,6 +671,8 @@ async function save(event) {
     broker,
     port,
     publishInterval,
+    profile,
+    measureMs,
     meta
   }) + "\n";
 
@@ -489,6 +699,10 @@ async function save(event) {
     }
 
     remember({ ssid, broker, port, publishInterval, meta });
+
+    $("resProfile").textContent =
+      (PROFILE_LABELS[profile] || profile) +
+      (measureMs ? `, every ${measureMs / 1000} s` : "");
 
     $("resDevice").textContent = info.id;
     $("resIp").textContent = status.ip || "-";
@@ -517,6 +731,13 @@ function next() {
   device = null;
   chars = {};
   info = {};
+
+  // A check belongs to the unit it ran on. Carrying it to the next sensor
+  // would let one unit's reading vouch for another's wiring.
+  verifiedProfile = "";
+  verifiedDetail = "";
+  $("probeResult").className = "status";
+
   setBusy(false);
   $("headerDevice").textContent = "";
   hideStatus();
@@ -529,6 +750,8 @@ function next() {
 
 $("btnConnect").addEventListener("click", connect);
 $("btnScan").addEventListener("click", scan);
+$("btnProbe").addEventListener("click", probe);
+$("profileSelect").addEventListener("change", onProfileChanged);
 $("ssidSelect").addEventListener("change", onSsidChanged);
 $("ssidManual").addEventListener("input", onSsidChanged);
 $("stepConfig").addEventListener("submit", save);

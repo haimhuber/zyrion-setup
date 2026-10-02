@@ -194,6 +194,26 @@
     </section>
 
     <section class="card">
+      <h2>Sensor</h2>
+      <p class="hint">
+        Choose what is wired to this unit, then press Check. The sensor has to
+        identify itself and return one real measurement before it can be saved.
+      </p>
+      <div class="field">
+        <label for="profileSelect">Sensor type</label>
+        <div class="inline">
+          <select id="profileSelect"></select>
+          <button type="button" class="secondary" id="btnProbe">Check</button>
+        </div>
+      </div>
+      <div class="field">
+        <label for="measureInterval">Measure every (seconds, optional)</label>
+        <input id="measureInterval" type="number" min="1" max="300" step="1" placeholder="sensor default">
+      </div>
+      <div id="probeResult" class="status"></div>
+    </section>
+
+    <section class="card">
       <details id="locationDetails">
         <summary>Location</summary>
         <div class="row">
@@ -218,6 +238,7 @@
     <h2>Sensor configured</h2>
     <dl>
       <dt>Sensor</dt><dd id="resDevice"></dd>
+      <dt>Measuring</dt><dd id="resProfile"></dd>
       <dt>IP address</dt><dd id="resIp"></dd>
       <dt>Wi-Fi</dt><dd id="resSsid"></dd>
       <dt>Broker</dt><dd id="resBroker"></dd>
