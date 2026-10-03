@@ -38,7 +38,7 @@ const FALLBACK_PROFILES = ["sht31", "scd41", "bh1750", "dht", "auto"];
 // renders the Sensor card with nothing to put in it, and the person sees an
 // empty dropdown with no explanation. The versioned script URL stops that
 // happening; this check catches it if it happens anyway.
-const APP_VERSION = "9";
+const APP_VERSION = "10";
 
 // Sensor firmware older than this has no probe command, so Check cannot work
 const MIN_FIRMWARE_FOR_PROBE = "1.4.0";
@@ -46,6 +46,10 @@ const MIN_FIRMWARE_FOR_PROBE = "1.4.0";
 // An SCD41 in low-power mode cannot produce its first sample for 30 s, and
 // the probe waits for a real one rather than reporting a guess
 const PROBE_TIMEOUT_MS = 75000;
+
+// How often to read the status characteristic while waiting, in case a
+// notification was lost
+const STATUS_POLL_MS = 1500;
 
 // Must match ConfigManager::MEASURE_INTERVAL_* in the firmware
 const MIN_MEASURE_SECONDS = 1;
@@ -66,6 +70,14 @@ let saving = false;
 let connectError = false;
 let lastStep = "";
 let statusWaiters = [];
+
+// Highest status counter seen from the sensor. Firmware 1.4.1 and newer
+// stamps every status with one.
+let lastStatusSeq = 0;
+
+// Stamped on every command the app sends; firmware 1.4.1 and newer echoes it
+// on every status, which is how an answer is matched to its request.
+let commandToken = 0;
 
 // The profile whose check passed on this sensor, and what it reported
 let verifiedProfile = "";
@@ -218,11 +230,39 @@ async function readJson(characteristic) {
   return JSON.parse(decoder.decode(value));
 }
 
-function waitForStatus(states, timeoutMs) {
+// Waits for the sensor to reach one of these states.
+//
+// afterSeq is the status counter as it stood when the command was sent. A
+// status with a counter at or below it is an answer to something earlier -
+// typically a read that was already in flight when the command went out,
+// which comes back holding the previous result. Accepting one of those is
+// how a fresh check ends up reporting the previous check's failure.
+//
+// It also polls. A notification is not acknowledged by the protocol, so one
+// can simply be lost; without polling that costs the entire timeout.
+function waitForStatus(states, timeoutMs, { token = 0, afterSeq = -1 } = {}) {
   return new Promise((resolve, reject) => {
-    const waiter = { states, resolve };
+    const waiter = { states, token, afterSeq, resolve: null };
+
+    const finish = (status) => {
+      clearInterval(poller);
+      clearTimeout(timer);
+      statusWaiters = statusWaiters.filter((w) => w !== waiter);
+      resolve(status);
+    };
+
+    waiter.resolve = finish;
+
     statusWaiters.push(waiter);
-    setTimeout(() => {
+
+    const poller = setInterval(() => {
+      // Harmless if nothing changed: the read goes through the same queue
+      // as everything else and resolves any waiter it satisfies
+      onStatusChanged().catch(() => {});
+    }, STATUS_POLL_MS);
+
+    const timer = setTimeout(() => {
+      clearInterval(poller);
       statusWaiters = statusWaiters.filter((w) => w !== waiter);
       reject(new Error("The sensor did not respond"));
     }, timeoutMs);
@@ -240,6 +280,22 @@ async function onStatusChanged() {
   }
   log(`status: ${JSON.stringify(status)}`);
 
+  if (typeof status.seq === "number") {
+    lastStatusSeq = Math.max(lastStatusSeq, status.seq);
+  }
+
+  // Progress from a command that is no longer the current one must not
+  // repaint the screen - that is how a finished check ends up looking as if
+  // it were still running.
+  const current =
+    typeof status.token !== "number" ||
+    status.token === 0 ||
+    status.token === commandToken;
+
+  if (!current) {
+    return;
+  }
+
   if (status.state === "connecting") {
     showStatus("info", status.message || "Connecting to Wi-Fi...", true);
   } else if (status.state === "testing_broker") {
@@ -253,10 +309,33 @@ async function onStatusChanged() {
   }
 
   for (const waiter of [...statusWaiters]) {
-    if (waiter.states.includes(status.state)) {
-      statusWaiters = statusWaiters.filter((w) => w !== waiter);
-      waiter.resolve(status);
+    if (!waiter.states.includes(status.state)) {
+      continue;
     }
+
+    // An answer to an earlier command is not an answer to this one. From
+    // firmware 1.4.1 the sensor echoes the number the app put on the command,
+    // which settles it whenever the answer happens to arrive.
+    if (typeof status.token === "number" && waiter.token > 0) {
+      if (status.token !== waiter.token) {
+        log(
+          `status ignored: token ${status.token} answers an earlier command, ` +
+          `waiting for ${waiter.token}`
+        );
+        continue;
+      }
+    } else if (
+      // Firmware without tokens: fall back to the counter, which closes the
+      // common case even if it cannot close all of them
+      typeof status.seq === "number" &&
+      waiter.afterSeq >= 0 &&
+      status.seq <= waiter.afterSeq
+    ) {
+      log(`status ignored: seq ${status.seq} is not newer than ${waiter.afterSeq}`);
+      continue;
+    }
+
+    waiter.resolve(status);
   }
 }
 
@@ -650,9 +729,18 @@ async function probe() {
   showProbe("info", "Checking the sensor...", true);
 
   try {
-    const result = waitForStatus(["probe_ok", "probe_failed"], PROBE_TIMEOUT_MS);
+    // This check's own number. Answers to earlier commands carry an earlier
+    // one and are ignored, whenever they happen to arrive.
+    const token = ++commandToken;
 
-    const payload = JSON.stringify({ probe: profile, measureMs }) + "\n";
+    const result = waitForStatus(
+      ["probe_ok", "probe_failed"],
+      PROBE_TIMEOUT_MS,
+      { token, afterSeq: lastStatusSeq }
+    );
+
+    const payload =
+      JSON.stringify({ probe: profile, measureMs, token }) + "\n";
     const bytes = encoder.encode(payload);
 
     for (let offset = 0; offset < bytes.length; offset += CHUNK_SIZE) {
@@ -787,7 +875,13 @@ async function save(event) {
   showStatus("info", "Sending configuration...", true);
 
   try {
-    const result = waitForStatus(["saved", "failed"], 45000);
+    const token = ++commandToken;
+
+    const result = waitForStatus(
+      ["saved", "failed"],
+      45000,
+      { token, afterSeq: lastStatusSeq }
+    );
 
     const bytes = encoder.encode(payload);
     for (let offset = 0; offset < bytes.length; offset += CHUNK_SIZE) {
