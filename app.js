@@ -38,7 +38,7 @@ const FALLBACK_PROFILES = ["sht31", "scd41", "bh1750", "dht", "auto"];
 // renders the Sensor card with nothing to put in it, and the person sees an
 // empty dropdown with no explanation. The versioned script URL stops that
 // happening; this check catches it if it happens anyway.
-const APP_VERSION = "10";
+const APP_VERSION = "11";
 
 // Sensor firmware older than this has no probe command, so Check cannot work
 const MIN_FIRMWARE_FOR_PROBE = "1.4.0";
@@ -242,16 +242,25 @@ async function readJson(characteristic) {
 // can simply be lost; without polling that costs the entire timeout.
 function waitForStatus(states, timeoutMs, { token = 0, afterSeq = -1 } = {}) {
   return new Promise((resolve, reject) => {
-    const waiter = { states, token, afterSeq, resolve: null };
+    const waiter = { states, token, afterSeq, resolve: null, fail: null };
 
-    const finish = (status) => {
+    const stop = () => {
       clearInterval(poller);
       clearTimeout(timer);
       statusWaiters = statusWaiters.filter((w) => w !== waiter);
+    };
+
+    waiter.resolve = (status) => {
+      stop();
       resolve(status);
     };
 
-    waiter.resolve = finish;
+    // Used when the link goes away: waiting out the full timeout for an
+    // answer that can no longer arrive tells the person nothing
+    waiter.fail = (error) => {
+      stop();
+      reject(error);
+    };
 
     statusWaiters.push(waiter);
 
@@ -316,7 +325,12 @@ async function onStatusChanged() {
     // An answer to an earlier command is not an answer to this one. From
     // firmware 1.4.1 the sensor echoes the number the app put on the command,
     // which settles it whenever the answer happens to arrive.
-    if (typeof status.token === "number" && waiter.token > 0) {
+    //
+    // Token 0 means the sensor has no number to echo - older firmware, or a
+    // command that carried none. Those fall through to the counter rule
+    // rather than being discarded, because a wait that can never be
+    // satisfied is worse than a rule that is merely weaker.
+    if (typeof status.token === "number" && status.token > 0 && waiter.token > 0) {
       if (status.token !== waiter.token) {
         log(
           `status ignored: token ${status.token} answers an earlier command, ` +
@@ -437,6 +451,18 @@ function disconnect() {
 function onDisconnected() {
   log(`disconnected (last step: ${lastStep})`);
   $("debugDetails").open = true;
+
+  // Nothing more will arrive on this link. Waiters are told now rather than
+  // sitting out their timeout.
+  const pending = statusWaiters;
+  statusWaiters = [];
+
+  for (const waiter of pending) {
+    if (waiter.fail) {
+      waiter.fail(new Error("DISCONNECTED"));
+    }
+  }
+
   if (saving) {
     return; // expected: sensor restarts after saving
   }
@@ -859,6 +885,10 @@ async function save(event) {
     meta[field] = $(field).value.trim();
   }
 
+  // The command's number goes in the payload, because that is what the
+  // sensor echoes back on every status that answers it
+  const token = ++commandToken;
+
   const payload = JSON.stringify({
     ssid,
     password: $("password").value,
@@ -867,6 +897,7 @@ async function save(event) {
     publishInterval,
     profile,
     measureMs,
+    token,
     meta
   }) + "\n";
 
@@ -875,8 +906,6 @@ async function save(event) {
   showStatus("info", "Sending configuration...", true);
 
   try {
-    const token = ++commandToken;
-
     const result = waitForStatus(
       ["saved", "failed"],
       45000,
@@ -920,6 +949,27 @@ async function save(event) {
   } catch (error) {
     saving = false;
     setBusy(false);
+
+    // The sensor restarts a few seconds after it saves. If the link went
+    // away before the confirmation arrived, the configuration has most
+    // likely been written - saying "saving failed" would be a guess, and
+    // the wrong one. Say what is known and how to settle it.
+    if (error && error.message === "DISCONNECTED") {
+      showStatus(
+        "warn",
+        `The sensor disconnected before confirming. It restarts after saving, so the ` +
+        `configuration was most likely written - it should appear on your broker within ` +
+        `a minute. Connect again to check.
+החיישן התנתק לפני אישור. הוא מופעל מחדש אחרי שמירה, ולכן סביר שההגדרות נשמרו - הוא אמור ` +
+        `להופיע בברוקר תוך דקה. התחבר שוב כדי לוודא.`
+      );
+
+      showStep("stepConnect");
+      $("headerDevice").textContent = "";
+
+      return;
+    }
+
     showStatus("err", `Saving failed: ${describeError(error)}. Keep the phone close to the sensor and try again.
 השמירה נכשלה. השאר את הטלפון קרוב לחיישן ונסה שוב.`);
   }
