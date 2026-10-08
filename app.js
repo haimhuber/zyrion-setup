@@ -38,7 +38,7 @@ const FALLBACK_PROFILES = ["sht31", "scd41", "bh1750", "dht", "auto"];
 // renders the Sensor card with nothing to put in it, and the person sees an
 // empty dropdown with no explanation. The versioned script URL stops that
 // happening; this check catches it if it happens anyway.
-const APP_VERSION = "11";
+const APP_VERSION = "12";
 
 // Sensor firmware older than this has no probe command, so Check cannot work
 const MIN_FIRMWARE_FOR_PROBE = "1.4.0";
@@ -55,10 +55,9 @@ const STATUS_POLL_MS = 1500;
 const MIN_MEASURE_SECONDS = 1;
 const MAX_MEASURE_SECONDS = 300;
 
-const META_FIELDS = [
-  "site", "building", "floor", "room", "department",
-  "zone", "panel", "equipment", "description"
-];
+// The four the sensor page also edits. A field this app does not send is
+// left untouched on the device - it is still stored and still published.
+const META_FIELDS = ["site", "building", "floor", "room"];
 const REMEMBER_KEY = "zyrion-setup-last";
 
 const $ = (id) => document.getElementById(id);
