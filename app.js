@@ -12,7 +12,7 @@ const STATUS_UUID  = "5a7e0005-8f2b-4c3d-9a1e-2b7c6d5e4f30";
 const CHUNK_SIZE = 180;
 // Must match ConfigManager::PUBLISH_INTERVAL_* in the firmware
 const DEFAULT_PUBLISH_INTERVAL = 30;
-const MIN_PUBLISH_INTERVAL = 5;
+const MIN_PUBLISH_INTERVAL = 3;
 const MAX_PUBLISH_INTERVAL = 300;
 const MANUAL_SSID = "__manual__";
 
@@ -38,7 +38,7 @@ const FALLBACK_PROFILES = ["sht31", "scd41", "bh1750", "dht", "auto"];
 // renders the Sensor card with nothing to put in it, and the person sees an
 // empty dropdown with no explanation. The versioned script URL stops that
 // happening; this check catches it if it happens anyway.
-const APP_VERSION = "12";
+const APP_VERSION = "13";
 
 // Sensor firmware older than this has no probe command, so Check cannot work
 const MIN_FIRMWARE_FOR_PROBE = "1.4.0";
