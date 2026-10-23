@@ -99,6 +99,9 @@ details[open] summary{margin-bottom:14px}
 .result dd{margin:0;font-weight:600;word-break:break-all;font-size:13px}
 
 .hidden{display:none !important}
+.toggle{display:flex;align-items:center;gap:10px;padding:6px 0;font-weight:600;cursor:pointer}
+.toggle input{width:18px;height:18px}
+.field-error{color:#c0392b;font-size:13px;margin:6px 0 0}
 .spinner{
   display:inline-block;width:14px;height:14px;margin-right:8px;
   border:2px solid currentColor;border-right-color:transparent;
@@ -115,7 +118,7 @@ pre#debugLog{
 }
 </style>
 </head>
-<body data-app-version="13">
+<body data-app-version="14">
 
 <header>
   <div>
@@ -175,6 +178,13 @@ pre#debugLog{
     </section>
 
     <section class="card">
+      <h2>Channels</h2>
+      <label class="toggle"><input id="mqttEnabled" type="checkbox" checked> Enable MQTT</label>
+      <label class="toggle"><input id="modbusEnabled" type="checkbox" checked> Enable Modbus (TCP, port 502)</label>
+      <p id="channelError" class="field-error" hidden>Enable at least one of MQTT or Modbus.</p>
+    </section>
+
+    <section class="card" id="mqttCard">
       <h2>MQTT broker</h2>
       <div class="row-wide">
         <div class="field">
@@ -255,6 +265,6 @@ pre#debugLog{
 
 </main>
 
-<script src="app.js?v=13"></script>
+<script src="app.js?v=14"></script>
 </body>
 </html>

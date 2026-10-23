@@ -38,7 +38,7 @@ const FALLBACK_PROFILES = ["sht31", "scd41", "bh1750", "dht", "auto"];
 // renders the Sensor card with nothing to put in it, and the person sees an
 // empty dropdown with no explanation. The versioned script URL stops that
 // happening; this check catches it if it happens anyway.
-const APP_VERSION = "13";
+const APP_VERSION = "14";
 
 // Sensor firmware older than this has no probe command, so Check cannot work
 const MIN_FIRMWARE_FOR_PROBE = "1.4.0";
@@ -828,7 +828,30 @@ function fillForm() {
   }
   $("locationDetails").open = hasLocation;
 
+  // Channels: the sensor's stored values win; default both on for an older
+  // unit that does not report them
+  $("mqttEnabled").checked = info.mqttEnabled !== false;
+  $("modbusEnabled").checked = info.modbusEnabled !== false;
+  reflectChannels();
+
   fillProfiles();
+}
+
+// Grey out the MQTT card and drop the broker's required flag when MQTT is
+// off, so a Modbus-only unit can be saved with no broker. Also shows the
+// "at least one" error inline.
+function reflectChannels() {
+  const mqtt = $("mqttEnabled").checked;
+  const modbus = $("modbusEnabled").checked;
+  const card = $("mqttCard");
+  if (card) {
+    card.style.opacity = mqtt ? "" : "0.5";
+    card.querySelectorAll("input").forEach((el) => { el.disabled = !mqtt; });
+  }
+  $("broker").required = mqtt;
+  $("port").required = mqtt;
+  $("publishInterval").required = mqtt;
+  $("channelError").hidden = mqtt || modbus;
 }
 
 async function save(event) {
@@ -837,12 +860,19 @@ async function save(event) {
   const ssid = selectedSsid();
   const broker = $("broker").value.trim();
   const port = parseInt($("port").value, 10) || 1883;
+  const mqttEnabled = $("mqttEnabled").checked;
+  const modbusEnabled = $("modbusEnabled").checked;
 
   if (!ssid) {
     showStatus("err", "Select a Wi-Fi network");
     return;
   }
-  if (!broker) {
+  if (!mqttEnabled && !modbusEnabled) {
+    showStatus("err", "Enable at least one of MQTT or Modbus");
+    return;
+  }
+  // The broker is only needed when MQTT is on.
+  if (mqttEnabled && !broker) {
     showStatus("err", "Enter the broker IP address");
     return;
   }
@@ -893,6 +923,8 @@ async function save(event) {
     password: $("password").value,
     broker,
     port,
+    mqttEnabled,
+    modbusEnabled,
     publishInterval,
     profile,
     measureMs,
@@ -1042,6 +1074,8 @@ $("profileSelect").addEventListener("change", onProfileChanged);
 $("ssidSelect").addEventListener("change", onSsidChanged);
 $("ssidManual").addEventListener("input", onSsidChanged);
 $("stepConfig").addEventListener("submit", save);
+$("mqttEnabled").addEventListener("change", reflectChannels);
+$("modbusEnabled").addEventListener("change", reflectChannels);
 $("btnNext").addEventListener("click", next);
 
 if (!navigator.bluetooth) {
